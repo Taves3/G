@@ -5,7 +5,7 @@ from nodesets.gsilenodes import *
 import traceback
 import os
 
-# There desperately needs to be an interpreter error system, along with a error system in GScript. Just take after HotScript.
+# There desperately needs to be an interpreter error system
 
 class Interpreter:
     def __init__(self, cwd: str | None = None, parser: typing.Callable[[str], NodeBody] | None = None):
@@ -71,6 +71,8 @@ class Interpreter:
         self.frame.locals["set_attribute"] = BuiltInFunction("set_attribute", built_in_set_attribute)
         self.frame.locals["get_attribute"] = BuiltInFunction("get_attribute", built_in_get_attribute)
 
+        # I have to add a function to get all attributes
+
         for node in nodebody.children:
             try:
                 self.visit(node)
@@ -91,6 +93,10 @@ class Interpreter:
     
     def visit_Include(self, node: Include):
         path = node.path
+
+        if not path.endswith(".g"):
+            path = f"{path}.g"
+
         if path[0] == "." and path[1] != "/":
             # This is a library path
             path = f"{self.std_path}/{path[1:]}"
@@ -107,6 +113,7 @@ class Interpreter:
             source = file.read()
 
         parsed = self.parser(source)
+        # This doesn't check whether a parser exists
         
         child = Interpreter(cwd=self.cwd)
         exit_code = child.interpret(parsed)
@@ -209,6 +216,9 @@ class Interpreter:
     def visit_String(self, node: String):
         return StringType(node.string)
 
+    def visit_List(self, node: List):
+        return NullType() # This needs to return a built in iterator.
+
     def visit_Name(self, node: Name):
         return node.target
 
@@ -254,7 +264,7 @@ class Interpreter:
             name = self.visit(node.condition.name)
 
             iterator = self.run_attribute(target, "__iterate__", [])
-            while self.run_attribute(iterator, "__bool__", []).value:
+            while self.run_attribute(iterator, "__has_next__", []).value:
                 self.frame.locals[name] = self.run_attribute(iterator, "__next__", [])
                 for stmt in node.body:
                     self.visit(stmt)
