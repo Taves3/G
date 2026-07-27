@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from .datatypes import *
-from nodesets.gsilenodes import *
+from ...nodesets.gsilenodes import *
 import traceback
 import os
 
-# There desperately needs to be an interpreter error system
+# This shouldn't have to be an Exception
+class InterpreterError(Exception):
+    def __init__(self, type: str, value: BaseType):
+        self.type = type
+        self.value = value
+
+# There should also be an InterpreterExit which should be an Exception.
+# Then, in the Interpreter, make a exception function, which takes in a message and stuff
+# to then set the "error" variable to, and raise the exit exception.
 
 class Interpreter:
     def __init__(self, cwd: str | None = None, parser: typing.Callable[[str], NodeBody] | None = None):
@@ -66,11 +74,17 @@ class Interpreter:
         else:
             self.framestack.append(frame)
 
-        self.frame.locals["console"] = ConsoleType(self.frame)
+        self.frame.locals["console"] = ConsoleType()
         self.frame.locals["print"] = BuiltInFunction("print", built_in_print)
+        self.frame.locals["range"] = BuiltInFunction("range", built_in_range)
+
         self.frame.locals["set_attribute"] = BuiltInFunction("set_attribute", built_in_set_attribute)
         self.frame.locals["get_attribute"] = BuiltInFunction("get_attribute", built_in_get_attribute)
 
+        self.frame.locals["std"] = NamespaceType(Frame({"Iterator": Iterator, "List": ListType}), "std")
+
+        self.frame.locals["true"] = Boolean(True)
+        self.frame.locals["false"] = Boolean(False)
         # I have to add a function to get all attributes
 
         for node in nodebody.children:
@@ -143,7 +157,20 @@ class Interpreter:
         return self.run_func(getter, [attr])
 
     def visit_Struct(self, node: Struct):
-        self.frame.locals[node.name] = StructType(node)
+        self.add_frame()
+
+        for stmt in node.body.children:
+            self.visit(stmt)
+
+        self.frame.locals[node.name] = StructType(self.pop_frame(), node.name)
+
+    def visit_Namespace(self, node: Namespace):
+        self.add_frame()
+
+        for stmt in node.body.children:
+            self.visit(stmt)
+            
+        self.frame.locals[node.name] = NamespaceType(self.pop_frame(), node.name)
 
     def visit_Assign(self, node: Assign):
         bv = self.visit(node.value)
@@ -196,6 +223,10 @@ class Interpreter:
             value = bv
 
         else:
+            # node kind itself needs to be another node
+            # for things like "list<int>"
+            # and the parser might need to be upgraded
+            # to handle "std.List<int>()"
             match node.kind:
                 case "float":
                     value = Float(bv)
@@ -217,7 +248,7 @@ class Interpreter:
         return StringType(node.string)
 
     def visit_List(self, node: List):
-        return NullType() # This needs to return a built in iterator.
+        return ListType([self.visit(element) for element in node.elements])
 
     def visit_Name(self, node: Name):
         return node.target
@@ -272,7 +303,7 @@ class Interpreter:
     def visit_If(self, node: If):
         condition = self.visit(node.condition)
         
-        if self.run_func(condition.get_attribute("truthy"), []).value:
+        if self.run_attribute(condition, "__bool__", []).value:
             for stmt in node.body:
                 self.visit(stmt)
 
@@ -287,3 +318,14 @@ def built_in_set_attribute(interpreter: Interpreter, args: list):
 def built_in_get_attribute(interpreter: Interpreter, args: list):
     this, name = args
     return this.get_attribute(name, interpreter)
+
+def built_in_range(interpreter: Interpreter, args: list):
+    if len(args) == 1:
+        return ListType([Integer(i) for i in range(args[0].value)])
+    
+    if len(args) == 2:
+        return ListType([Integer(i) for i in range(args[0].value, args[1].value)])
+    
+    if len(args) == 3:
+        return ListType([Integer(i) for i in range(args[0].value, args[1].value, args[2].value)])
+    raise InterpreterError("Arguments", f"Invalid number of arguments, expected 1, 2, or 3, but got {len(args)}")

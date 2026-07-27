@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from .returnsignal import ReturnSignal
-from nodesets.gsilenodes import *
+from ...nodesets.gsilenodes import *
 import typing
 
 if typing.TYPE_CHECKING:
     from .interpreter import Interpreter
 
 class Frame:
-    def __init__(self):
-        self.locals: dict[str, typing.Any] = {}
+    def __init__(self, locals: dict[str, BaseType] | None = None):
+        self.locals: dict[str, BaseType] = locals or {}
         self.var_kinds: dict[str, str] = {}
         self.modifier_stack: list[Node] = []
 
@@ -37,7 +37,7 @@ class BaseType:
 class ObjectType(BaseType):
     def __init__(self, frame: Frame | dict[str, BaseType], string: StringType | None = None):
         super().__init__(frame)
-        self._string = string
+        self._string = string or StringType("<Object>")
         self.base_attribute("__string__"       , BuiltInFunction("__string__"       , self._default__string__       ))
         self.base_attribute("constructor"      , BuiltInFunction("constructor"      , self._default_constructor     ))
         self.base_attribute("__get_attribute__", BuiltInFunction("__get_attribute__", self._default__get_attribute__))
@@ -53,7 +53,7 @@ class ObjectType(BaseType):
         return self.set_attribute(args[0], args[1], interpreter)
 
     def _default__string__(self, interpreter: Interpreter, args: list):
-        return self._string or StringType("<Object>")
+        return self._string
 
 class FunctionType(BaseType):
     def call(self, interpreter: Interpreter, args: list) -> ObjectType: ...
@@ -150,12 +150,12 @@ class BuiltInFunction(FunctionType):
         return self.frame.locals[name]
 
 class StructType(FunctionType):
-    def __init__(self, struct: Struct):
-        super().__init__(Frame())
-        self.struct = struct
+    def __init__(self, frame: Frame, name: str):
+        super().__init__(frame)
+        self.name = StringType(f"<Struct {name!r}>")
 
     def _string(self, interpreter: Interpreter, args: list):
-        return StringType(f"<Struct {self.struct.name!r}>")
+        return self.name
 
     def _default__get_attribute__(self, interpreter: Interpreter, args: list):
         return self.get_attribute(args[0], interpreter)
@@ -182,6 +182,35 @@ class StructType(FunctionType):
                     self.frame.locals[name] = BuiltInFunction("__get_attribute__", self._default__get_attribute__)
                 case "__set_attribute__":
                     self.frame.locals[name] = BuiltInFunction("__set_attribute__", self._default__set_attribute__)
+        return self.frame.locals[name]
+
+class NamespaceType(BaseType):
+    def __init__(self, frame: Frame, name: str):
+        super().__init__(frame)
+        self.name = StringType(f"<Namespace {name!r}>")
+
+    def _string(self, interpreter: Interpreter, args: list):
+        return self.name
+
+    def _default__get_attribute__(self, interpreter: Interpreter, args: list):
+        return self.get_attribute(args[0], interpreter)
+
+    def _default__set_attribute__(self, interpreter: Interpreter, args: list):
+        return self.set_attribute(args[0], args[1], interpreter)
+    
+    def get_attribute(self, name: str, interpreter: Interpreter):
+        if name not in self.frame.locals:
+            match name:
+                case "__string__":
+                    self.frame.locals[name] = BuiltInFunction("__string__", self._string)
+                case "__get_attribute__":
+                    self.frame.locals[name] = BuiltInFunction("__get_attribute__", self._default__get_attribute__)
+                case "__set_attribute__":
+                    self.frame.locals[name] = BuiltInFunction("__set_attribute__", self._default__set_attribute__)
+                case _:
+                    if name in self.code.frame.locals:
+                        return self.code.frame.locals[name]
+
         return self.frame.locals[name]
 
 class StringType(BaseType):
@@ -213,11 +242,16 @@ class NullType(ObjectType):
     def __init__(self):
         super().__init__({}, StringType("null"))
 
-class ConsoleType(ObjectType):
-    def __init__(self, frame: Frame):
-        super().__init__(frame, StringType("<Console>"))
-        self.base_attribute("log", BuiltInFunction("log", self.log))
+class ConsoleType(BaseType):
+    def __init__(self):
+        super().__init__({
+            "log": BuiltInFunction("log", self.log),
+            "__string__": BuiltInFunction("__string__", self._string)
+        })
         self.text = ""
+
+    def _string(self, interpreter: Interpreter, args: list):
+        return StringType("<Console>")
 
     def log(self, interpreter: Interpreter, args: list):
         arg = args[0]
@@ -233,6 +267,7 @@ class Integer(ObjectType):
             "*": BuiltInFunction("*", self.mult),
             "**": BuiltInFunction("**", self.pow),
             "/": BuiltInFunction("/", self.div),
+            "%": BuiltInFunction("%", self.mod),
 
             "<": BuiltInFunction("<", self.lt),
             ">": BuiltInFunction(">", self.gt),
@@ -290,6 +325,14 @@ class Integer(ObjectType):
         if isinstance(arg, Float):
             return Integer(self.value * arg.value)
 
+    def mod(self, interpreter: Interpreter, args: list):
+        arg = args[0]
+        if isinstance(arg, Integer):
+            return Integer(self.value % arg.value)
+        
+        if isinstance(arg, Float):
+            return Integer(self.value % arg.value)
+
     def pow(self, interpreter: Interpreter, args: list):
         arg = args[0]
         if isinstance(arg, Integer):
@@ -315,6 +358,7 @@ class Float(ObjectType):
             "*": BuiltInFunction("*", self.mult),
             "**": BuiltInFunction("**", self.pow),
             "/": BuiltInFunction("/", self.div),
+            "%": BuiltInFunction("%", self.mod),
 
             "<": BuiltInFunction("<", self.lt),
             ">": BuiltInFunction(">", self.gt),
@@ -372,6 +416,14 @@ class Float(ObjectType):
         if isinstance(arg, Float):
             return Float(self.value * arg.value)
 
+    def mod(self, interpreter: Interpreter, args: list):
+        arg = args[0]
+        if isinstance(arg, Integer):
+            return Float(self.value % arg.value)
+        
+        if isinstance(arg, Float):
+            return Float(self.value % arg.value)
+
     def pow(self, interpreter: Interpreter, args: list):
         arg = args[0]
         if isinstance(arg, Integer):
@@ -387,6 +439,44 @@ class Float(ObjectType):
         
         if isinstance(arg, Float):
             return Float(self.value / arg.value)
+
+class Iterator(ObjectType):
+    def __init__(self, lst: ListType):
+        super().__init__({
+            "__iterate__": BuiltInFunction("__iterate__", self.iterate),
+            "__next__": BuiltInFunction("__next__", self.next),
+            "__has_next__": BuiltInFunction("__has_next__", self.has_next)
+        }, StringType("<Built-In Iterator>"))
+        self.lst = lst
+        self.num_elements = len(self.lst.elements)
+        self.index = -1
+
+    def iterate(self, interpreter: Interpreter, args: list):
+        return self
+
+    def next(self, interpreter: Interpreter, args: list):
+        self.index += 1
+        return self.lst.elements[self.index]
+
+    def has_next(self, interpreter: Interpreter, args: list):
+        if self.index < self.num_elements - 1:
+            return Boolean(True)
+        return Boolean(False)
+
+class ListType(ObjectType):
+    def __init__(self, elements: list[BaseType]):
+        # Update this to use a constructor
+        super().__init__({
+            "__iterate__": BuiltInFunction("__iterate__", self.iterate) ,
+            "__length__" : BuiltInFunction("__length__", self.length)
+        })
+        self.elements = elements
+
+    def iterate(self, interpreter: Interpreter, args: list):
+        return Iterator(self)
+
+    def length(self, interpreter: Interpreter, args: list):
+        return Integer(len(self.elements))
 
 class Boolean(ObjectType):
     def __init__(self, value: bool):

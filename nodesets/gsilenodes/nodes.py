@@ -52,6 +52,16 @@ class Struct(Node):
         body = indent_text(str(self.body))
         return f"struct {self.name} {{\n{body}\n}}"
 
+class Namespace(Node):
+    def __init__(self, name: str, body: NodeBody, *, nodedata: NodeData):
+        super().__init__([body], nodedata=nodedata)
+        self.name = name
+        self.body = body
+    
+    def __str__(self):
+        body = indent_text(str(self.body))
+        return f"namespace {self.name} {{\n{body}\n}}"
+
 class Empty(Node):
     def __init__(self, *, nodedata: NodeData):
         super().__init__([], nodedata=nodedata)

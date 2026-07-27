@@ -1,5 +1,5 @@
 from __future__ import annotations
-from nodesets.gsilenodes import *
+from ...nodesets.gsilenodes import *
 import string
 
 __all__ = ["Parser"]
@@ -7,7 +7,7 @@ __all__ = ["Parser"]
 types = [list(set([
     *string.ascii_letters,
     *"1234567890.", *"_"
-])), "+-*/=<>", "()", "[]"]
+])), "+-*/=<>%", "()", "[]"]
 
 class ParserContext:
     def __init__(self, source: str, lines: list[str], line_starts: dict[int, int], parent: ParserContext | None = None):
@@ -27,6 +27,7 @@ class Parser:
             "**": 4,
             "*": 3,
             "/": 3,
+            "%": 3,
             "+": 2,
             "-": 2,
             "==": 1,
@@ -52,6 +53,25 @@ class Parser:
     def skiplines(self, lines: int):
         self.ctx.line += lines
         self.ctx.char = self.ctx.line_starts[self.ctx.line]
+
+    def split_by(self, expr: str, splitter: str = " ", /) -> list[str]:
+        depth = 0
+        split = []
+        recorded = ""
+        for char in expr:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            if depth == 0:
+                if char == splitter:
+                    split.append(recorded)
+                    recorded = ""
+                    continue
+            recorded += char
+        if recorded:
+            split.append(recorded)
+        return split
     
     def get_between(self, left: str, right: str, start_char: int, skiplines: bool = False):
         depth = 0
@@ -143,7 +163,10 @@ class Parser:
 
         if line.startswith("struct"):
             return self.parse_struct(line)
-
+        
+        if line.startswith("namespace"):
+            return self.parse_namespace(line)
+        
         if line.startswith("def"):
             return self.parse_func(line)
 
@@ -214,6 +237,15 @@ class Parser:
 
         return Struct(name, body, nodedata=self.get_node_data())
 
+    def parse_namespace(self, line: str):
+        split = line.split(" ")
+        name = split[1]
+
+        bodytext = self.get_between("{", "}", self.ctx.char + len(" ".join(split[:2])), skiplines=True)
+        body = self.parse(bodytext)
+
+        return Namespace(name, body, nodedata=self.get_node_data())
+
     def parse_instruction(self, line: str, split: list[str]):
         instruction = split[0]
         match instruction:
@@ -261,11 +293,11 @@ class Parser:
         if self.is_num(expr):
             return Constant(expr, nodedata=self.get_node_data())
         
-        if "in" in expr:
-            split = expr.split(" ")
-            if len(split) == 3:
-                if split[1] == "in":
-                    return In(Name(split[0], nodedata=self.get_node_data()), self.parse_expr(split[2]), nodedata=self.get_node_data())
+        # Just a quick hack for fixing for loops
+        split = self.split_by(expr)
+        if len(split) == 3:
+            if split[1] == "in":
+                return In(Name(split[0], nodedata=self.get_node_data()), self.parse_expr(split[2]), nodedata=self.get_node_data())
 
         if expr[0] == "[" and expr[-1] == "]":
             return self.parse_list(expr)
@@ -285,6 +317,9 @@ class Parser:
                 break
 
         if not is_expr:
+            if len(split) == 2:
+                if self.is_in_type(split[0], 0) and self.is_in_type(split[1], 0):
+                    return Declare(Name(split[1], nodedata=self.get_node_data()), split[0], Empty(nodedata=self.get_node_data()), nodedata=self.get_node_data())
             return self.parse_part(expr)
 
         max_prec = 9999
@@ -370,15 +405,15 @@ class Parser:
                     rparen = i
                     break
         
-        name = expr[:lparen - 1]
+        func = expr[:lparen - 1]
 
         argstext = expr[lparen:rparen].strip()
         if argstext:
-            args = [self.parse_expr(a) for a in argstext.split(",")]
+            args = [self.parse_expr(arg) for arg in self.split_by(argstext, ",")]
         else:
             args = []
 
-        return Call(self.parse_expr(name), Arguments(args, nodedata=self.get_node_data()), nodedata=self.get_node_data())
+        return Call(self.parse_expr(func), Arguments(args, nodedata=self.get_node_data()), nodedata=self.get_node_data())
 
     def parse_func(self, line: str):
         parts = line.split(" ")
