@@ -1,4 +1,3 @@
-#include <.stdlist>
 #include <.stdstring>
 
 template <T>
