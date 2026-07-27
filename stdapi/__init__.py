@@ -1,3 +1,5 @@
+"""Small Python API for G using the standard parser and executor"""
+
 from ..executors import gmist
 from ..parsers import gsile
 

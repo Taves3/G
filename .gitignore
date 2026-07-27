@@ -1,0 +1,3 @@
+*.vs
+*.code-workspace
+__pycache__/
